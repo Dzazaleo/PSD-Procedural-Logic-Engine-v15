@@ -1,5 +1,5 @@
 import { readPsd, writePsd, Psd, ReadOptions, WriteOptions, Layer } from 'ag-psd';
-import { TemplateMetadata, ContainerDefinition, DesignValidationReport, ValidationIssue, SerializableLayer, ContainerContext } from '../types';
+import { TemplateMetadata, ContainerDefinition, DesignValidationReport, ValidationIssue, SerializableLayer, ContainerContext, TransformedPayload, TransformedLayer } from '../types';
 
 // --- Procedural Palette & Theme Logic ---
 
@@ -384,6 +384,137 @@ export const findLayerByPath = (psd: Psd, pathId: string): Layer | null => {
   }
 
   return targetLayer || null;
+};
+
+/**
+ * Composites a visual representation of the TransformedPayload using the original PSD binary data.
+ * This is the central rendering engine for CARO audits, UI previews, and visual debuggers.
+ * 
+ * @param payload The transformed geometry and logic instructions.
+ * @param psd The original binary source providing pixel data.
+ * @returns A Promise resolving to a high-quality Data URL (image/jpeg).
+ */
+export const compositePayloadToCanvas = async (payload: TransformedPayload, psd: Psd): Promise<string | null> => {
+    if (!payload || !psd) return null;
+
+    const { w, h } = payload.metrics.target;
+    // Create off-screen canvas
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    // Fill background (Dark slate to help AI see boundaries, matches UI aesthetics)
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, w, h);
+
+    const drawLayers = async (layers: TransformedLayer[]) => {
+        // Iterate reverse (bottom-up) to match composition order
+        for (let i = layers.length - 1; i >= 0; i--) {
+            const layer = layers[i];
+            
+            // Optimization: Culling
+            // Simple AABB check. If layer is completely off-canvas, skip.
+            // Note: Rotation might expand AABB, but strict off-screen check is safe for extreme outliers.
+            if (
+                layer.coords.x > w || 
+                layer.coords.y > h || 
+                (layer.coords.x + layer.coords.w) < 0 || 
+                (layer.coords.y + layer.coords.h) < 0
+            ) {
+                continue;
+            }
+
+            if (layer.isVisible) {
+                ctx.save();
+                
+                // 1. Group Recursion
+                if (layer.type === 'group' && layer.children) {
+                    await drawLayers(layer.children);
+                }
+                
+                // 2. Generative Content (Visual Placeholder)
+                else if (layer.type === 'generative') {
+                    const gx = layer.coords.x;
+                    const gy = layer.coords.y;
+                    const gw = layer.coords.w;
+                    const gh = layer.coords.h;
+
+                    // Apply Global Alpha
+                    ctx.globalAlpha = layer.opacity;
+
+                    if (payload.previewUrl) {
+                        // In an ideal pipeline, previewUrl represents the fully composited generative result.
+                        // However, mapping a single URL to multiple generative layers is ambiguous.
+                        // For the audit view, we prioritize the placeholder to show "Intent" clearly.
+                        // But if previewUrl is available, we render a ghost hint.
+                        
+                        ctx.fillStyle = 'rgba(192, 132, 252, 0.2)'; 
+                        ctx.strokeStyle = 'rgba(192, 132, 252, 0.8)';
+                        ctx.lineWidth = 1;
+                        ctx.fillRect(gx, gy, gw, gh);
+                        ctx.strokeRect(gx, gy, gw, gh);
+                        
+                        // Add Label
+                        ctx.fillStyle = '#e9d5ff';
+                        ctx.font = '10px monospace';
+                        ctx.fillText('AI GEN', gx + 4, gy + 12);
+                    } else {
+                        // Standard Placeholder
+                        const grad = ctx.createLinearGradient(gx, gy, gx + gw, gy + gh);
+                        grad.addColorStop(0, 'rgba(99, 102, 241, 0.3)'); // Indigo
+                        grad.addColorStop(1, 'rgba(168, 85, 247, 0.3)'); // Purple
+                        ctx.fillStyle = grad;
+                        ctx.fillRect(gx, gy, gw, gh);
+                        ctx.strokeStyle = 'rgba(168, 85, 247, 0.5)';
+                        ctx.strokeRect(gx, gy, gw, gh);
+                    }
+                }
+                
+                // 3. Standard PSD Pixel Layer
+                else {
+                    const originalLayer = findLayerByPath(psd, layer.id);
+                    if (originalLayer && originalLayer.canvas) {
+                        ctx.globalAlpha = layer.opacity;
+
+                        // TRANSFORMS
+                        // Determine Center Point for Rotation/Scaling relative to the new bounding box
+                        const cx = layer.coords.x + (layer.coords.w / 2);
+                        const cy = layer.coords.y + (layer.coords.h / 2);
+
+                        // Move to center
+                        ctx.translate(cx, cy);
+
+                        // Rotation (CARO Injection)
+                        if (layer.transform.rotation) {
+                            ctx.rotate((layer.transform.rotation * Math.PI) / 180);
+                        }
+
+                        // Draw Image centered at (0,0) relative to translation context
+                        // The dimensions (layer.coords.w/h) are already scaled by the pipeline
+                        try {
+                            ctx.drawImage(
+                                originalLayer.canvas, 
+                                -layer.coords.w / 2, 
+                                -layer.coords.h / 2, 
+                                layer.coords.w, 
+                                layer.coords.h
+                            );
+                        } catch (e) {
+                            // Ignore drawing errors for empty/corrupt layers
+                        }
+                    }
+                }
+
+                ctx.restore();
+            }
+        }
+    };
+
+    await drawLayers(payload.layers);
+
+    return canvas.toDataURL('image/jpeg', 0.9);
 };
 
 /**
