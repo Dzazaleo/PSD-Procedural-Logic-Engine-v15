@@ -405,6 +405,8 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
     if (!ctx) return null;
 
     // Fill background (Dark slate to help AI see boundaries, matches UI aesthetics)
+    // Clear the canvas completely first to prevent ghosting
+    ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, w, h);
 
@@ -433,18 +435,23 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
             // Visibility Check
             if (!layer.isVisible) continue;
 
-            // Opacity Context Check
+            // --- RECURSIVE GROUP HANDLING ---
+            // CRITICAL: Groups should NOT apply their opacity to the global context if the children 
+            // already carry their final computed opacity. This prevents "double-dipping" alpha which causes faint colors.
+            // We blindly trust the TransformedPayload children to have correct absolute opacity.
+            if (layer.type === 'group' && layer.children) {
+                // Just recurse. Do not save/restore context or set globalAlpha for the group container.
+                await drawLayers(layer.children);
+                continue;
+            } 
+            
+            // --- LEAF LAYER HANDLING (Pixel / Generative) ---
+            // Only apply opacity at the leaf level.
             ctx.save();
             ctx.globalAlpha = layer.opacity;
 
-            // 1. GROUP (Recursive Flattening)
-            if (layer.type === 'group' && layer.children) {
-                // Groups pass through; their children contain the absolute coords
-                await drawLayers(layer.children);
-            } 
-            
             // 2. GENERATIVE LAYER (AI/Proxy)
-            else if (layer.type === 'generative') {
+            if (layer.type === 'generative') {
                 const { x, y, w: dw, h: dh } = layer.coords;
                 
                 if (genImage && payload.previewUrl) {
@@ -469,28 +476,20 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
                 if (sourceLayer && sourceLayer.canvas) {
                     const { x, y, w: dw, h: dh } = layer.coords;
 
-                    // Rotation Logic: Use Offscreen Canvas Baking
+                    // Rotation Logic: Use Canvas Transform instead of temp canvas
                     if (layer.transform && layer.transform.rotation) {
                         const rot = (layer.transform.rotation * Math.PI) / 180;
-                        const tempCanvas = document.createElement('canvas');
-                        // Temp canvas needs to fit the rotated image? 
-                        // Actually, 'dw' and 'dh' are the destination bounding box calculated by Remapper.
-                        // We simply draw the source image scaled to fit this box, but rotated.
-                        // Ideally, we rotate the source, then scale. 
                         
-                        tempCanvas.width = dw;
-                        tempCanvas.height = dh;
-                        const tCtx = tempCanvas.getContext('2d');
+                        // Translate to center of target rect
+                        const cx = x + dw / 2;
+                        const cy = y + dh / 2;
                         
-                        if (tCtx) {
-                            tCtx.translate(dw / 2, dh / 2);
-                            tCtx.rotate(rot);
-                            // Draw centered at origin of temp canvas
-                            tCtx.drawImage(sourceLayer.canvas, -dw / 2, -dh / 2, dw, dh);
-                            
-                            // Composite back to main canvas
-                            ctx.drawImage(tempCanvas, x, y);
-                        }
+                        ctx.translate(cx, cy);
+                        ctx.rotate(rot);
+                        
+                        // Draw centered at origin (relative to translation)
+                        // Note: dw, dh are the scaled dimensions
+                        ctx.drawImage(sourceLayer.canvas, -dw / 2, -dh / 2, dw, dh);
                     } else {
                         // Direct Draw (Standard)
                         // ABSOLUTE MAPPING: coords.x/y are the final destination on the canvas
