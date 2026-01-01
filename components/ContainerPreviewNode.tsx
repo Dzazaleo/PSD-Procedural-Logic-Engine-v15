@@ -131,7 +131,8 @@ export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) 
   };
 
   const layerCount = incomingPayload ? getLayerCount(incomingPayload) : 0;
-  const isPolished = incomingPayload?.isPolished;
+  // If it passed through here, it's implicitly polished unless explicitly failing
+  const isPolished = incomingPayload?.isPolished || !!previewUrl;
 
   return (
     <div className={`min-w-[300px] min-h-[300px] bg-slate-900 rounded-lg shadow-2xl border font-sans flex flex-col overflow-hidden transition-all group ${error === 'BINARY_MISSING' ? 'border-orange-500/50 hover:border-orange-400' : 'border-emerald-500/50 hover:border-emerald-400'}`}>

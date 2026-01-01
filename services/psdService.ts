@@ -392,14 +392,16 @@ export const findLayerByPath = (psd: Psd, pathId: string): Layer | null => {
  * 
  * @param payload The transformed geometry and logic instructions.
  * @param psd The original binary source providing pixel data.
- * @returns A Promise resolving to a high-quality Data URL (image/jpeg).
+ * @returns A Promise resolving to a high-quality Data URL (image/png).
  */
 export const compositePayloadToCanvas = async (payload: TransformedPayload, psd: Psd): Promise<string | null> => {
     if (!payload || !psd) return null;
 
-    // We assume payload.metrics.target now includes x/y coordinates to perform local crop normalization.
-    // If not, we default to 0,0 which might result in clipping, but this refactor assumes the payload is updated.
-    const { w, h, x: targetX, y: targetY } = payload.metrics.target;
+    // Destructure with fallbacks for safety
+    // targetX and targetY are essential for normalizing global coordinates to local canvas space
+    const targetX = payload.metrics.target.x || 0;
+    const targetY = payload.metrics.target.y || 0;
+    const { w, h } = payload.metrics.target;
     
     const canvas = document.createElement('canvas');
     canvas.width = w;
@@ -407,30 +409,13 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    // Enable high quality image smoothing to prevent artifacts during scale down
+    // Enable high quality image smoothing to reduce aliasing artifacts
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    // 1. Clear Canvas (Transparency Guard)
+    // 1. Transparency Guard: Clear to transparent (rgba(0,0,0,0))
+    // We do NOT fill with a solid color, relying on the UI to provide the backdrop (checkerboard/dark).
     ctx.clearRect(0, 0, w, h);
-
-    // 2. Draw Checkerboard Background (Photoshop Style)
-    // To visualize transparency correctly against faint layers.
-    const patternCanvas = document.createElement('canvas');
-    patternCanvas.width = 20;
-    patternCanvas.height = 20;
-    const pCtx = patternCanvas.getContext('2d');
-    if (pCtx) {
-        pCtx.fillStyle = '#f8fafc'; // slate-50
-        pCtx.fillRect(0, 0, 20, 20);
-        pCtx.fillStyle = '#e2e8f0'; // slate-200
-        pCtx.fillRect(0, 0, 10, 10);
-        pCtx.fillRect(10, 10, 10, 10);
-        
-        const pattern = ctx.createPattern(patternCanvas, 'repeat');
-        ctx.fillStyle = pattern || '#fff';
-        ctx.fillRect(0, 0, w, h);
-    }
 
     // Optional: Pre-load the generative preview if available to use as texture
     let genImage: HTMLImageElement | null = null;
@@ -449,33 +434,28 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
 
     const drawLayers = async (layers: TransformedLayer[]) => {
         // Iterate in Reverse Order (Length-1 to 0) to maintain Painter's Algorithm.
-        // In ag-psd/Photoshop structure, index 0 is typically the Top-Most layer.
-        // Therefore, we must draw the Bottom-Most (last index) first.
+        // This ensures the bottom-most layers (background) are drawn first.
         for (let i = layers.length - 1; i >= 0; i--) {
             const layer = layers[i];
             
-            // Visibility Check
             if (!layer.isVisible) continue;
 
             // --- RECURSIVE GROUP HANDLING ---
-            // Groups should NOT apply their opacity to the global context if the children 
-            // already carry their final computed opacity. We trust the flattened/transformed payload logic.
+            // Groups merely contain other layers; we recurse into them.
             if (layer.type === 'group' && layer.children) {
                 await drawLayers(layer.children);
                 continue;
             } 
             
             // --- LEAF LAYER HANDLING (Pixel / Generative) ---
-            // Apply opacity and coordinate normalization at the leaf level.
-            
             ctx.save();
             ctx.globalAlpha = layer.opacity;
 
             // Coordinate Normalization:
-            // Convert Absolute World Coordinates (layer.coords) to Local Crop Coordinates (dest).
-            // destX = WorldX - TargetCropX
-            const destX = layer.coords.x - (targetX || 0);
-            const destY = layer.coords.y - (targetY || 0);
+            // Convert Global World Coordinates (layer.coords) to Local Canvas Coordinates (dest).
+            // destX = GlobalX - ContainerOriginX
+            const destX = layer.coords.x - targetX;
+            const destY = layer.coords.y - targetY;
             const destW = layer.coords.w;
             const destH = layer.coords.h;
 
@@ -491,12 +471,10 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
                     drawGenerativePlaceholder(ctx, destX, destY, destW, destH);
                 }
             } 
-            
             // 3. STANDARD PIXEL LAYER (Binary Source)
             else {
                 const sourceLayer = findLayerByPath(psd, layer.id);
 
-                // Critical Rule: Graceful skip if binary canvas is missing (common for adjustment layers)
                 if (sourceLayer && sourceLayer.canvas) {
                     // Rotation Logic: Use Canvas Transform
                     if (layer.transform && layer.transform.rotation) {
@@ -524,7 +502,8 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
 
     await drawLayers(payload.layers);
 
-    return canvas.toDataURL('image/jpeg', 0.9);
+    // Return PNG to preserve transparency
+    return canvas.toDataURL('image/png');
 };
 
 // Helper for drawing consistent AI placeholders
