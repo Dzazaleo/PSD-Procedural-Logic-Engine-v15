@@ -432,7 +432,34 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
         }
     }
 
-    const drawLayers = async (layers: TransformedLayer[]) => {
+    // Helper: Map PSD Blend Modes to Canvas GlobalCompositeOperation
+    const mapBlendMode = (mode?: string): GlobalCompositeOperation => {
+        if (!mode) return 'source-over';
+        // Note: Canvas doesn't support 'pass-through' directly for groups, 
+        // effectively treating it as source-over for the group content relative to background
+        switch (mode.toLowerCase()) {
+            case 'multiply': return 'multiply';
+            case 'screen': return 'screen';
+            case 'overlay': return 'overlay';
+            case 'darken': return 'darken';
+            case 'lighten': return 'lighten';
+            case 'color-dodge': return 'color-dodge';
+            case 'color-burn': return 'color-burn';
+            case 'hard-light': return 'hard-light';
+            case 'soft-light': return 'soft-light';
+            case 'difference': return 'difference';
+            case 'exclusion': return 'exclusion';
+            case 'hue': return 'hue';
+            case 'saturation': return 'saturation';
+            case 'color': return 'color';
+            case 'luminosity': return 'luminosity';
+            case 'normal': 
+            default: 
+                return 'source-over';
+        }
+    };
+
+    const drawLayers = async (layers: TransformedLayer[], parentOpacity: number = 1.0) => {
         // Iterate in Reverse Order (Length-1 to 0) to maintain Painter's Algorithm.
         // This ensures the bottom-most layers (background) are drawn first.
         for (let i = layers.length - 1; i >= 0; i--) {
@@ -440,16 +467,20 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
             
             if (!layer.isVisible) continue;
 
+            // Calculate Accumulated Opacity
+            const effectiveOpacity = parentOpacity * layer.opacity;
+
             // --- RECURSIVE GROUP HANDLING ---
             // Groups merely contain other layers; we recurse into them.
             if (layer.type === 'group' && layer.children) {
-                await drawLayers(layer.children);
+                // Pass down the accumulated opacity to children
+                await drawLayers(layer.children, effectiveOpacity);
                 continue;
             } 
             
             // --- LEAF LAYER HANDLING (Pixel / Generative) ---
             ctx.save();
-            ctx.globalAlpha = layer.opacity;
+            ctx.globalAlpha = effectiveOpacity;
 
             // Coordinate Normalization:
             // Convert Global World Coordinates (layer.coords) to Local Canvas Coordinates (dest).
@@ -461,6 +492,7 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
 
             // 2. GENERATIVE LAYER (AI/Proxy)
             if (layer.type === 'generative') {
+                ctx.globalCompositeOperation = 'source-over'; // AI layers are usually normal/opaque
                 if (genImage && payload.previewUrl) {
                     try {
                         ctx.drawImage(genImage, destX, destY, destW, destH);
@@ -476,6 +508,9 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
                 const sourceLayer = findLayerByPath(psd, layer.id);
 
                 if (sourceLayer && sourceLayer.canvas) {
+                    // Apply Blend Mode
+                    ctx.globalCompositeOperation = mapBlendMode(sourceLayer.blendMode);
+
                     // Rotation Logic: Use Canvas Transform
                     if (layer.transform && layer.transform.rotation) {
                         const rot = (layer.transform.rotation * Math.PI) / 180;
