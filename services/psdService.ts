@@ -388,7 +388,7 @@ export const findLayerByPath = (psd: Psd, pathId: string): Layer | null => {
 
 /**
  * Composites a visual representation of the TransformedPayload using the original PSD binary data.
- * This is the central rendering engine for CARO audits, UI previews, and visual debuggers.
+ * Uses a robust Recursive Painter's Algorithm to correctly handle nested groups and alpha blending.
  * 
  * @param payload The transformed geometry and logic instructions.
  * @param psd The original binary source providing pixel data.
@@ -398,7 +398,6 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
     if (!payload || !psd) return null;
 
     const { w, h } = payload.metrics.target;
-    // Create off-screen canvas
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
@@ -409,112 +408,118 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, w, h);
 
+    // Optional: Pre-load the generative preview if available to use as texture
+    let genImage: HTMLImageElement | null = null;
+    if (payload.previewUrl) {
+        try {
+            genImage = new Image();
+            genImage.src = payload.previewUrl;
+            await new Promise<void>((resolve) => {
+                genImage!.onload = () => resolve();
+                genImage!.onerror = () => resolve(); // Non-blocking failure
+            });
+        } catch (e) {
+            console.warn("Failed to load preview texture for compositor", e);
+        }
+    }
+
     const drawLayers = async (layers: TransformedLayer[]) => {
-        // Iterate reverse (bottom-up) to match composition order
+        // Iterate in Reverse Order (Length-1 to 0) to maintain Painter's Algorithm.
+        // In ag-psd/Photoshop structure, index 0 is typically the Top-Most layer.
+        // Therefore, we must draw the Bottom-Most (last index) first.
         for (let i = layers.length - 1; i >= 0; i--) {
             const layer = layers[i];
             
-            // Optimization: Culling
-            // Simple AABB check. If layer is completely off-canvas, skip.
-            // Note: Rotation might expand AABB, but strict off-screen check is safe for extreme outliers.
-            if (
-                layer.coords.x > w || 
-                layer.coords.y > h || 
-                (layer.coords.x + layer.coords.w) < 0 || 
-                (layer.coords.y + layer.coords.h) < 0
-            ) {
-                continue;
-            }
+            // Visibility Check
+            if (!layer.isVisible) continue;
 
-            if (layer.isVisible) {
-                ctx.save();
+            // Opacity Context Check
+            ctx.save();
+            ctx.globalAlpha = layer.opacity;
+
+            // 1. GROUP (Recursive Flattening)
+            if (layer.type === 'group' && layer.children) {
+                // Groups pass through; their children contain the absolute coords
+                await drawLayers(layer.children);
+            } 
+            
+            // 2. GENERATIVE LAYER (AI/Proxy)
+            else if (layer.type === 'generative') {
+                const { x, y, w: dw, h: dh } = layer.coords;
                 
-                // 1. Group Recursion
-                if (layer.type === 'group' && layer.children) {
-                    await drawLayers(layer.children);
+                if (genImage && payload.previewUrl) {
+                    // If we have a generated preview, map it to the generative layer slot
+                    // This acts as a 'texture' for the placeholder
+                    try {
+                        ctx.drawImage(genImage, x, y, dw, dh);
+                    } catch (e) {
+                        // Fallback if draw fails
+                        drawGenerativePlaceholder(ctx, x, y, dw, dh);
+                    }
+                } else {
+                    drawGenerativePlaceholder(ctx, x, y, dw, dh);
                 }
-                
-                // 2. Generative Content (Visual Placeholder)
-                else if (layer.type === 'generative') {
-                    const gx = layer.coords.x;
-                    const gy = layer.coords.y;
-                    const gw = layer.coords.w;
-                    const gh = layer.coords.h;
+            } 
+            
+            // 3. STANDARD PIXEL LAYER (Binary Source)
+            else {
+                const sourceLayer = findLayerByPath(psd, layer.id);
 
-                    // Apply Global Alpha
-                    ctx.globalAlpha = layer.opacity;
+                // Critical Rule: Graceful skip if binary canvas is missing (common for adjustment layers)
+                if (sourceLayer && sourceLayer.canvas) {
+                    const { x, y, w: dw, h: dh } = layer.coords;
 
-                    if (payload.previewUrl) {
-                        // In an ideal pipeline, previewUrl represents the fully composited generative result.
-                        // However, mapping a single URL to multiple generative layers is ambiguous.
-                        // For the audit view, we prioritize the placeholder to show "Intent" clearly.
-                        // But if previewUrl is available, we render a ghost hint.
+                    // Rotation Logic: Use Offscreen Canvas Baking
+                    if (layer.transform && layer.transform.rotation) {
+                        const rot = (layer.transform.rotation * Math.PI) / 180;
+                        const tempCanvas = document.createElement('canvas');
+                        // Temp canvas needs to fit the rotated image? 
+                        // Actually, 'dw' and 'dh' are the destination bounding box calculated by Remapper.
+                        // We simply draw the source image scaled to fit this box, but rotated.
+                        // Ideally, we rotate the source, then scale. 
                         
-                        ctx.fillStyle = 'rgba(192, 132, 252, 0.2)'; 
-                        ctx.strokeStyle = 'rgba(192, 132, 252, 0.8)';
-                        ctx.lineWidth = 1;
-                        ctx.fillRect(gx, gy, gw, gh);
-                        ctx.strokeRect(gx, gy, gw, gh);
+                        tempCanvas.width = dw;
+                        tempCanvas.height = dh;
+                        const tCtx = tempCanvas.getContext('2d');
                         
-                        // Add Label
-                        ctx.fillStyle = '#e9d5ff';
-                        ctx.font = '10px monospace';
-                        ctx.fillText('AI GEN', gx + 4, gy + 12);
+                        if (tCtx) {
+                            tCtx.translate(dw / 2, dh / 2);
+                            tCtx.rotate(rot);
+                            // Draw centered at origin of temp canvas
+                            tCtx.drawImage(sourceLayer.canvas, -dw / 2, -dh / 2, dw, dh);
+                            
+                            // Composite back to main canvas
+                            ctx.drawImage(tempCanvas, x, y);
+                        }
                     } else {
-                        // Standard Placeholder
-                        const grad = ctx.createLinearGradient(gx, gy, gx + gw, gy + gh);
-                        grad.addColorStop(0, 'rgba(99, 102, 241, 0.3)'); // Indigo
-                        grad.addColorStop(1, 'rgba(168, 85, 247, 0.3)'); // Purple
-                        ctx.fillStyle = grad;
-                        ctx.fillRect(gx, gy, gw, gh);
-                        ctx.strokeStyle = 'rgba(168, 85, 247, 0.5)';
-                        ctx.strokeRect(gx, gy, gw, gh);
+                        // Direct Draw (Standard)
+                        // ABSOLUTE MAPPING: coords.x/y are the final destination on the canvas
+                        ctx.drawImage(sourceLayer.canvas, x, y, dw, dh);
                     }
                 }
-                
-                // 3. Standard PSD Pixel Layer
-                else {
-                    const originalLayer = findLayerByPath(psd, layer.id);
-                    if (originalLayer && originalLayer.canvas) {
-                        ctx.globalAlpha = layer.opacity;
-
-                        // TRANSFORMS
-                        // Determine Center Point for Rotation/Scaling relative to the new bounding box
-                        const cx = layer.coords.x + (layer.coords.w / 2);
-                        const cy = layer.coords.y + (layer.coords.h / 2);
-
-                        // Move to center
-                        ctx.translate(cx, cy);
-
-                        // Rotation (CARO Injection)
-                        if (layer.transform.rotation) {
-                            ctx.rotate((layer.transform.rotation * Math.PI) / 180);
-                        }
-
-                        // Draw Image centered at (0,0) relative to translation context
-                        // The dimensions (layer.coords.w/h) are already scaled by the pipeline
-                        try {
-                            ctx.drawImage(
-                                originalLayer.canvas, 
-                                -layer.coords.w / 2, 
-                                -layer.coords.h / 2, 
-                                layer.coords.w, 
-                                layer.coords.h
-                            );
-                        } catch (e) {
-                            // Ignore drawing errors for empty/corrupt layers
-                        }
-                    }
-                }
-
-                ctx.restore();
             }
+
+            ctx.restore();
         }
     };
 
     await drawLayers(payload.layers);
 
     return canvas.toDataURL('image/jpeg', 0.9);
+};
+
+// Helper for drawing consistent AI placeholders
+const drawGenerativePlaceholder = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => {
+    ctx.fillStyle = 'rgba(192, 132, 252, 0.3)'; // Purple tint
+    ctx.strokeStyle = 'rgba(192, 132, 252, 0.8)';
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    
+    // Label
+    ctx.fillStyle = '#e9d5ff';
+    ctx.font = '10px monospace';
+    ctx.fillText('AI GEN', x + 4, y + 12);
 };
 
 /**
