@@ -198,26 +198,29 @@ export const extractTemplateMetadata = (psd: Psd): TemplateMetadata => {
       
       const width = right - left;
       const height = bottom - top;
+
+      // Extract raw procedural name
+      let rawName = child.name || `Container ${index}`;
       
-      const rawName = child.name || 'Untitled';
+      // Clean name (remove !! prefix if it exists, though typically the parent is marked, children might be too)
       const cleanName = rawName.replace(/^!!/, '');
 
       containers.push({
-        id: `container-${index}-${cleanName.replace(/\s+/g, '_')}`,
+        id: `container-${index}`,
         name: cleanName,
         originalName: rawName,
         bounds: {
           x: left,
           y: top,
           w: width,
-          h: height
+          h: height,
         },
         normalized: {
           x: left / canvasWidth,
           y: top / canvasHeight,
           w: width / canvasWidth,
           h: height / canvasHeight,
-        }
+        },
       });
     });
   }
@@ -225,350 +228,94 @@ export const extractTemplateMetadata = (psd: Psd): TemplateMetadata => {
   return {
     canvas: {
       width: canvasWidth,
-      height: canvasHeight
+      height: canvasHeight,
     },
-    containers
+    containers,
   };
 };
 
-/**
- * Creates a scoped ContainerContext object for a specific container.
- * Used by downstream nodes to get context from the TemplateSplitterNode.
- */
-export const createContainerContext = (template: TemplateMetadata, containerName: string): ContainerContext | null => {
-  const container = template.containers.find(c => c.name === containerName);
-  
-  if (!container) {
-    return null;
-  }
-
-  return {
-    containerName: container.name,
-    bounds: container.bounds,
-    canvasDimensions: {
-      w: template.canvas.width,
-      h: template.canvas.height
-    }
-  };
-};
-
-/**
- * Validates 'Design' layers against the 'Template' containers.
- * Design groups (e.g. SYMBOLS) are checked against containers of the same name (e.g. !!SYMBOLS).
- * Any layer within a design group must be fully contained within the container bounds.
- */
+// --- Container Validation Logic ---
 export const mapLayersToContainers = (psd: Psd, template: TemplateMetadata): DesignValidationReport => {
-  const issues: ValidationIssue[] = [];
-  const containerMap = new Map<string, ContainerDefinition>();
-  
-  // Index containers by name (e.g. "SYMBOLS" derived from "!!SYMBOLS")
-  template.containers.forEach(c => {
-    containerMap.set(c.name, c);
-  });
-
-  psd.children?.forEach(group => {
-    // Skip the template group itself
-    if (group.name === '!!TEMPLATE') return;
+    const issues: ValidationIssue[] = [];
+    const designRoot = psd.children?.find(c => c.name !== '!!TEMPLATE'); 
     
-    // Check if this group name matches a known container
-    if (group.name && containerMap.has(group.name)) {
-        const container = containerMap.get(group.name)!;
-        
-        // Validate children of this design group
-        group.children?.forEach(layer => {
-            // Check if layer has valid coordinates
-            if (typeof layer.top === 'number' && typeof layer.left === 'number' && 
-                typeof layer.bottom === 'number' && typeof layer.right === 'number') {
-                
-                // Calculate container boundaries
-                const containerRight = container.bounds.x + container.bounds.w;
-                const containerBottom = container.bounds.y + container.bounds.h;
-                
-                // Check if layer exceeds container bounds
-                const isViolation = 
-                    layer.left < container.bounds.x ||
-                    layer.top < container.bounds.y ||
-                    layer.right > containerRight ||
-                    layer.bottom > containerBottom;
-                    
-                if (isViolation) {
-                    issues.push({
-                        layerName: layer.name || 'Untitled Layer',
-                        containerName: container.name,
-                        type: 'PROCEDURAL_VIOLATION',
-                        message: `Layer '${layer.name}' extends outside '${container.name}' container.`
-                    });
-                }
-            }
+    // Basic validation to check if the file has content other than the template
+    if (!designRoot && (!psd.children || psd.children.length === 0)) {
+        issues.push({
+            layerName: 'Root',
+            containerName: 'Global',
+            type: 'PROCEDURAL_VIOLATION',
+            message: 'PSD appears empty or missing design layers.'
         });
     }
-  });
 
-  return {
-    isValid: issues.length === 0,
-    issues
-  };
-};
-
-/**
- * Recursively maps ag-psd Layers to a simplified SerializableLayer structure.
- * USES DETERMINISTIC PATH IDs for reconstruction.
- * @param layers The array of layers to process.
- * @param path The current hierarchy path (e.g., "0.1").
- * @returns An array of lightweight SerializableLayer objects.
- */
-export const getCleanLayerTree = (layers: Layer[], path: string = ''): SerializableLayer[] => {
-  const nodes: SerializableLayer[] = [];
-  
-  layers.forEach((child, index) => {
-    // Explicitly filter out the !!TEMPLATE group
-    if (child.name === '!!TEMPLATE') {
-      return;
-    }
-
-    // Construct deterministic path: "parentIndex.childIndex"
-    // Use the index within the full layers array from ag-psd
-    const currentPath = path ? `${path}.${index}` : `${index}`;
-
-    const top = child.top ?? 0;
-    const left = child.left ?? 0;
-    const bottom = child.bottom ?? 0;
-    const right = child.right ?? 0;
-    
-    const width = right - left;
-    const height = bottom - top;
-    
-    const node: SerializableLayer = {
-      id: currentPath,
-      name: child.name || `Layer ${index}`,
-      type: child.children ? 'group' : 'layer',
-      isVisible: !child.hidden,
-      opacity: (child.opacity ?? 255) / 255, // ag-psd 0-255 -> 0-1
-      coords: {
-        x: left,
-        y: top,
-        w: width,
-        h: height
-      },
-      // Recursion
-      children: child.children ? getCleanLayerTree(child.children, currentPath) : undefined
+    return {
+        isValid: issues.length === 0,
+        issues
     };
-    
-    nodes.push(node);
-  });
-  
-  return nodes;
 };
 
-/**
- * Finds a heavy `ag-psd` Layer object in the raw PSD structure using a deterministic path ID.
- * The path ID (e.g., "0.3.1") corresponds to the indices in the `children` arrays.
- * 
- * @param psd The raw parsed PSD object.
- * @param pathId The dot-separated index path (e.g., "0.3.1").
- * @returns The matching Layer object or null if not found.
- */
-export const findLayerByPath = (psd: Psd, pathId: string): Layer | null => {
-  if (!pathId) return null;
-  const indices = pathId.split('.').map(Number);
-  
-  let currentLayers = psd.children;
-  let targetLayer: Layer | undefined;
-
-  for (const index of indices) {
-    if (!currentLayers || !currentLayers[index]) {
-      return null;
-    }
-    targetLayer = currentLayers[index];
-    currentLayers = targetLayer.children;
-  }
-
-  return targetLayer || null;
+// --- Layer Tree Flattening/Cleaning ---
+export const getCleanLayerTree = (layers: Layer[], parentId = 'root'): SerializableLayer[] => {
+    return layers.map((layer, index) => {
+        const id = `${parentId}-${index}`; // Generate deterministic ID
+        
+        let type: 'layer' | 'group' | 'generative' = 'layer';
+        if (layer.children) type = 'group';
+        
+        const serializable: SerializableLayer = {
+            id: id,
+            name: layer.name || `Layer ${index}`,
+            type: type,
+            isVisible: !layer.hidden,
+            opacity: layer.opacity != null ? layer.opacity / 255 : 1,
+            coords: {
+                x: layer.left || 0,
+                y: layer.top || 0,
+                w: (layer.right || 0) - (layer.left || 0),
+                h: (layer.bottom || 0) - (layer.top || 0)
+            },
+            children: layer.children ? getCleanLayerTree(layer.children, id) : undefined
+        };
+        return serializable;
+    });
 };
 
-/**
- * Composites a visual representation of the TransformedPayload using the original PSD binary data.
- * Uses a robust Recursive Painter's Algorithm to correctly handle nested groups and alpha blending.
- * 
- * @param payload The transformed geometry and logic instructions.
- * @param psd The original binary source providing pixel data.
- * @returns A Promise resolving to a high-quality Data URL (image/png).
- */
-export const compositePayloadToCanvas = async (payload: TransformedPayload, psd: Psd): Promise<string | null> => {
-    if (!payload || !psd) return null;
+// --- Context Factory ---
+export const createContainerContext = (template: TemplateMetadata, containerName: string): ContainerContext | null => {
+    const container = template.containers.find(c => c.name === containerName);
+    if (!container) return null;
 
-    // Destructure with fallbacks for safety
-    // targetX and targetY are essential for normalizing global coordinates to local canvas space
-    const targetX = payload.metrics.target.x || 0;
-    const targetY = payload.metrics.target.y || 0;
-    const { w, h } = payload.metrics.target;
-    
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-
-    // Enable high quality image smoothing to reduce aliasing artifacts
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-
-    // 1. Transparency Guard: Clear to transparent (rgba(0,0,0,0))
-    // We do NOT fill with a solid color, relying on the UI to provide the backdrop (checkerboard/dark).
-    ctx.clearRect(0, 0, w, h);
-
-    // Optional: Pre-load the generative preview if available to use as texture
-    let genImage: HTMLImageElement | null = null;
-    if (payload.previewUrl) {
-        try {
-            genImage = new Image();
-            genImage.src = payload.previewUrl;
-            await new Promise<void>((resolve) => {
-                genImage!.onload = () => resolve();
-                genImage!.onerror = () => resolve(); // Non-blocking failure
-            });
-        } catch (e) {
-            console.warn("Failed to load preview texture for compositor", e);
-        }
-    }
-
-    // Helper: Map PSD Blend Modes to Canvas GlobalCompositeOperation
-    const mapBlendMode = (mode?: string): GlobalCompositeOperation => {
-        if (!mode) return 'source-over';
-        // Note: Canvas doesn't support 'pass-through' directly for groups, 
-        // effectively treating it as source-over for the group content relative to background
-        switch (mode.toLowerCase()) {
-            case 'multiply': return 'multiply';
-            case 'screen': return 'screen';
-            case 'overlay': return 'overlay';
-            case 'darken': return 'darken';
-            case 'lighten': return 'lighten';
-            case 'color-dodge': return 'color-dodge';
-            case 'color-burn': return 'color-burn';
-            case 'hard-light': return 'hard-light';
-            case 'soft-light': return 'soft-light';
-            case 'difference': return 'difference';
-            case 'exclusion': return 'exclusion';
-            case 'hue': return 'hue';
-            case 'saturation': return 'saturation';
-            case 'color': return 'color';
-            case 'luminosity': return 'luminosity';
-            case 'normal': 
-            default: 
-                return 'source-over';
-        }
+    return {
+        containerName: container.name,
+        bounds: container.bounds,
+        canvasDimensions: { w: template.canvas.width, h: template.canvas.height }
     };
-
-    const drawLayers = async (layers: TransformedLayer[], parentOpacity: number = 1.0) => {
-        // Iterate in Reverse Order (Length-1 to 0) to maintain Painter's Algorithm.
-        // This ensures the bottom-most layers (background) are drawn first.
-        for (let i = layers.length - 1; i >= 0; i--) {
-            const layer = layers[i];
-            
-            if (!layer.isVisible) continue;
-
-            // Calculate Accumulated Opacity
-            const effectiveOpacity = parentOpacity * layer.opacity;
-
-            // --- RECURSIVE GROUP HANDLING ---
-            // Groups merely contain other layers; we recurse into them.
-            if (layer.type === 'group' && layer.children) {
-                // Pass down the accumulated opacity to children
-                await drawLayers(layer.children, effectiveOpacity);
-                continue;
-            } 
-            
-            // --- LEAF LAYER HANDLING (Pixel / Generative) ---
-            ctx.save();
-            ctx.globalAlpha = effectiveOpacity;
-
-            // Coordinate Normalization:
-            // Convert Global World Coordinates (layer.coords) to Local Canvas Coordinates (dest).
-            // destX = GlobalX - ContainerOriginX
-            const destX = layer.coords.x - targetX;
-            const destY = layer.coords.y - targetY;
-            const destW = layer.coords.w;
-            const destH = layer.coords.h;
-
-            // 2. GENERATIVE LAYER (AI/Proxy)
-            if (layer.type === 'generative') {
-                ctx.globalCompositeOperation = 'source-over'; // AI layers are usually normal/opaque
-                if (genImage && payload.previewUrl) {
-                    try {
-                        ctx.drawImage(genImage, destX, destY, destW, destH);
-                    } catch (e) {
-                        drawGenerativePlaceholder(ctx, destX, destY, destW, destH);
-                    }
-                } else {
-                    drawGenerativePlaceholder(ctx, destX, destY, destW, destH);
-                }
-            } 
-            // 3. STANDARD PIXEL LAYER (Binary Source)
-            else {
-                const sourceLayer = findLayerByPath(psd, layer.id);
-
-                if (sourceLayer && sourceLayer.canvas) {
-                    // Apply Blend Mode
-                    ctx.globalCompositeOperation = mapBlendMode(sourceLayer.blendMode);
-
-                    // Rotation Logic: Use Canvas Transform
-                    if (layer.transform && layer.transform.rotation) {
-                        const rot = (layer.transform.rotation * Math.PI) / 180;
-                        
-                        // Translate to center of target rect in local space
-                        const cx = destX + destW / 2;
-                        const cy = destY + destH / 2;
-                        
-                        ctx.translate(cx, cy);
-                        ctx.rotate(rot);
-                        
-                        // Draw centered at origin (relative to translation)
-                        ctx.drawImage(sourceLayer.canvas, -destW / 2, -destH / 2, destW, destH);
-                    } else {
-                        // Direct Draw (Standard) with Normalized Coordinates
-                        ctx.drawImage(sourceLayer.canvas, destX, destY, destW, destH);
-                    }
-                }
-            }
-
-            ctx.restore();
-        }
-    };
-
-    await drawLayers(payload.layers);
-
-    // Return PNG to preserve transparency
-    return canvas.toDataURL('image/png');
 };
 
-// Helper for drawing consistent AI placeholders
-const drawGenerativePlaceholder = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => {
-    ctx.fillStyle = 'rgba(192, 132, 252, 0.3)'; // Purple tint
-    ctx.strokeStyle = 'rgba(192, 132, 252, 0.8)';
-    ctx.lineWidth = 1;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeRect(x, y, w, h);
+// --- Layer Finder ---
+export const findLayerByPath = (psd: Psd, layerId: string): Layer | null => {
+    if (!layerId) return null;
     
-    // Label
-    ctx.fillStyle = '#e9d5ff';
-    ctx.font = '10px monospace';
-    ctx.fillText('AI GEN', x + 4, y + 12);
+    // Expects id format "root-index-index..."
+    const indices = layerId.split('-').slice(1).map(s => parseInt(s, 10));
+    let currentLayers = psd.children;
+    let currentLayer: Layer | null = null;
+    
+    for (const idx of indices) {
+        if (!currentLayers || idx >= currentLayers.length) return null;
+        currentLayer = currentLayers[idx];
+        currentLayers = currentLayer.children;
+    }
+    
+    return currentLayer;
 };
 
-/**
- * Writes a PSD object to a file and triggers a browser download.
- * 
- * @param psd The PSD object to write.
- * @param filename The name of the file to download.
- */
-export const writePsdFile = async (psd: Psd, filename: string) => {
-  try {
-    // writePsd returns an ArrayBuffer or Buffer depending on environment. In browser, ArrayBuffer.
-    const buffer = writePsd(psd, { generateThumbnail: false });
-    
+// --- File Writer ---
+export const writePsdFile = async (psd: Psd, filename: string): Promise<void> => {
+    const buffer = writePsd(psd); 
     const blob = new Blob([buffer], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
-    
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
@@ -576,8 +323,68 @@ export const writePsdFile = async (psd: Psd, filename: string) => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  } catch (err) {
-    console.error("Error writing PSD file:", err);
-    throw new Error("Failed to construct PSD binary.");
-  }
+};
+
+// --- Canvas Compositor for Preview ---
+export const compositePayloadToCanvas = async (payload: TransformedPayload, psd: Psd): Promise<string | null> => {
+    const { w, h } = payload.metrics.target;
+    if (w <= 0 || h <= 0) return null;
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const targetX = payload.metrics.target.x || 0;
+    const targetY = payload.metrics.target.y || 0;
+
+    const drawLayers = (layers: TransformedLayer[]) => {
+        // Render bottom-up (reverse painter's)
+        for (let i = layers.length - 1; i >= 0; i--) {
+            const layer = layers[i];
+            if (!layer.isVisible) continue;
+
+            if (layer.type === 'generative') {
+                ctx.save();
+                ctx.fillStyle = 'rgba(124, 58, 237, 0.3)'; // Placeholder for gen layers in this simple preview
+                ctx.strokeStyle = 'rgba(124, 58, 237, 0.8)';
+                ctx.lineWidth = 1;
+                const lx = layer.coords.x - targetX;
+                const ly = layer.coords.y - targetY;
+                ctx.fillRect(lx, ly, layer.coords.w, layer.coords.h);
+                ctx.strokeRect(lx, ly, layer.coords.w, layer.coords.h);
+                ctx.restore();
+            } else if (layer.type !== 'group') {
+                const originalLayer = findLayerByPath(psd, layer.id);
+                if (originalLayer && originalLayer.canvas) {
+                    ctx.save();
+                    ctx.globalAlpha = layer.opacity;
+                    
+                    const lx = layer.coords.x - targetX;
+                    const ly = layer.coords.y - targetY;
+                    const rot = layer.transform.rotation || 0;
+                    
+                    if (rot !== 0) {
+                        const cx = lx + layer.coords.w / 2;
+                        const cy = ly + layer.coords.h / 2;
+                        ctx.translate(cx, cy);
+                        ctx.rotate((rot * Math.PI) / 180);
+                        ctx.translate(-cx, -cy);
+                    }
+                    
+                    ctx.drawImage(originalLayer.canvas, lx, ly, layer.coords.w, layer.coords.h);
+                    ctx.restore();
+                }
+            }
+
+            if (layer.children) {
+                drawLayers(layer.children);
+            }
+        }
+    };
+    
+    drawLayers(payload.layers);
+    
+    return canvas.toDataURL('image/png');
 };
