@@ -18,8 +18,9 @@ const renderCurrentState = async (payload: TransformedPayload, psd: Psd): Promis
     if (!payload || !psd) return null;
 
     const { w, h } = payload.metrics.target;
-    const targetX = payload.metrics.target.x || 0;
-    const targetY = payload.metrics.target.y || 0;
+    // Explicit coordinate extraction (using ?? 0 for safety)
+    const targetX = payload.metrics.target.x ?? 0;
+    const targetY = payload.metrics.target.y ?? 0;
 
     const canvas = document.createElement('canvas');
     canvas.width = w;
@@ -281,7 +282,7 @@ const ReviewerInstanceRow: React.FC<{
             </div>
         </div>
     );
-};
+});
 
 export const DesignReviewerNode = memo(({ id, data }: NodeProps<PSDNodeData>) => {
   const instanceCount = data.instanceCount || 1;

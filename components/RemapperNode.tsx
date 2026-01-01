@@ -171,8 +171,8 @@ interface OverrideMetric {
     deltaX: number;
     deltaY: number;
     scale: number;
-    citedRule?: string; // New: Textual rule attribution
-    anchorIndex?: number; // New: Visual anchor reference
+    citedRule?: string; 
+    anchorIndex?: number; 
 }
 
 const calculateOverrideMetrics = (
@@ -286,7 +286,6 @@ const OverrideInspector = ({
                             </div>
                         </div>
                         
-                        {/* New: Attribution UI */}
                         {(m.citedRule || m.anchorIndex !== undefined) && (
                             <div className="mt-1.5 pt-1.5 border-t border-slate-700/50 space-y-1">
                                 {m.citedRule && (
@@ -1169,4 +1168,5 @@ export const RemapperNode = memo(({ id, data }: NodeProps<PSDNodeData>) => {
 
     </div>
   );
-});
+}
+);
