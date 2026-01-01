@@ -133,7 +133,7 @@ export interface MappingContext {
   // Visual Sandboxing: Upstream nodes can pass a draft preview
   previewUrl?: string; 
   // Explicit Target Dimensions for deterministic rendering
-  targetDimensions?: { w: number, h: number };
+  targetDimensions?: { x: number, y: number, w: number, h: number };
   generationAllowed?: boolean; // Propagated gate state
 }
 

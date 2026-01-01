@@ -485,7 +485,12 @@ export const DesignAnalystNode = memo(({ id, data }: NodeProps<PSDNodeData>) => 
                     isExplicitIntent: hasExplicitKeywords
                 } : undefined,
                 previewUrl: undefined,
-                targetDimensions: targetData ? { w: targetData.bounds.w, h: targetData.bounds.h } : undefined
+                targetDimensions: targetData ? { 
+                    x: targetData.bounds.x, 
+                    y: targetData.bounds.y, 
+                    w: targetData.bounds.w, 
+                    h: targetData.bounds.h 
+                } : undefined
             };
             
              registerResolved(id, `source-out-${i}`, augmentedContext);
@@ -847,7 +852,12 @@ export const DesignAnalystNode = memo(({ id, data }: NodeProps<PSDNodeData>) => 
                 isExplicitIntent
             },
             previewUrl: undefined, // Clear stale preview immediately
-            targetDimensions: targetData ? { w: targetData.bounds.w, h: targetData.bounds.h } : undefined
+            targetDimensions: targetData ? { 
+                x: targetData.bounds.x, 
+                y: targetData.bounds.y, 
+                w: targetData.bounds.w, 
+                h: targetData.bounds.h 
+            } : undefined
         };
         
         // 1. Force update the registry without the preview first (Clear state)
