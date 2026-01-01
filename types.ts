@@ -169,8 +169,8 @@ export interface TransformedPayload {
   layers: TransformedLayer[];
   scaleFactor: number;
   metrics: {
-    source: { w: number, h: number };
-    target: { w: number, h: number };
+    source: { x: number, y: number, w: number, h: number };
+    target: { x: number, y: number, w: number, h: number };
   };
   requiresGeneration?: boolean;
   previewUrl?: string;

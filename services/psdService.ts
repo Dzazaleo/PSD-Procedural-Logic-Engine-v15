@@ -397,18 +397,40 @@ export const findLayerByPath = (psd: Psd, pathId: string): Layer | null => {
 export const compositePayloadToCanvas = async (payload: TransformedPayload, psd: Psd): Promise<string | null> => {
     if (!payload || !psd) return null;
 
-    const { w, h } = payload.metrics.target;
+    // We assume payload.metrics.target now includes x/y coordinates to perform local crop normalization.
+    // If not, we default to 0,0 which might result in clipping, but this refactor assumes the payload is updated.
+    const { w, h, x: targetX, y: targetY } = payload.metrics.target;
+    
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    // Fill background (Dark slate to help AI see boundaries, matches UI aesthetics)
-    // Clear the canvas completely first to prevent ghosting
+    // Enable high quality image smoothing to prevent artifacts during scale down
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // 1. Clear Canvas (Transparency Guard)
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, w, h);
+
+    // 2. Draw Checkerboard Background (Photoshop Style)
+    // To visualize transparency correctly against faint layers.
+    const patternCanvas = document.createElement('canvas');
+    patternCanvas.width = 20;
+    patternCanvas.height = 20;
+    const pCtx = patternCanvas.getContext('2d');
+    if (pCtx) {
+        pCtx.fillStyle = '#f8fafc'; // slate-50
+        pCtx.fillRect(0, 0, 20, 20);
+        pCtx.fillStyle = '#e2e8f0'; // slate-200
+        pCtx.fillRect(0, 0, 10, 10);
+        pCtx.fillRect(10, 10, 10, 10);
+        
+        const pattern = ctx.createPattern(patternCanvas, 'repeat');
+        ctx.fillStyle = pattern || '#fff';
+        ctx.fillRect(0, 0, w, h);
+    }
 
     // Optional: Pre-load the generative preview if available to use as texture
     let genImage: HTMLImageElement | null = null;
@@ -436,35 +458,37 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
             if (!layer.isVisible) continue;
 
             // --- RECURSIVE GROUP HANDLING ---
-            // CRITICAL: Groups should NOT apply their opacity to the global context if the children 
-            // already carry their final computed opacity. This prevents "double-dipping" alpha which causes faint colors.
-            // We blindly trust the TransformedPayload children to have correct absolute opacity.
+            // Groups should NOT apply their opacity to the global context if the children 
+            // already carry their final computed opacity. We trust the flattened/transformed payload logic.
             if (layer.type === 'group' && layer.children) {
-                // Just recurse. Do not save/restore context or set globalAlpha for the group container.
                 await drawLayers(layer.children);
                 continue;
             } 
             
             // --- LEAF LAYER HANDLING (Pixel / Generative) ---
-            // Only apply opacity at the leaf level.
+            // Apply opacity and coordinate normalization at the leaf level.
+            
             ctx.save();
             ctx.globalAlpha = layer.opacity;
 
+            // Coordinate Normalization:
+            // Convert Absolute World Coordinates (layer.coords) to Local Crop Coordinates (dest).
+            // destX = WorldX - TargetCropX
+            const destX = layer.coords.x - (targetX || 0);
+            const destY = layer.coords.y - (targetY || 0);
+            const destW = layer.coords.w;
+            const destH = layer.coords.h;
+
             // 2. GENERATIVE LAYER (AI/Proxy)
             if (layer.type === 'generative') {
-                const { x, y, w: dw, h: dh } = layer.coords;
-                
                 if (genImage && payload.previewUrl) {
-                    // If we have a generated preview, map it to the generative layer slot
-                    // This acts as a 'texture' for the placeholder
                     try {
-                        ctx.drawImage(genImage, x, y, dw, dh);
+                        ctx.drawImage(genImage, destX, destY, destW, destH);
                     } catch (e) {
-                        // Fallback if draw fails
-                        drawGenerativePlaceholder(ctx, x, y, dw, dh);
+                        drawGenerativePlaceholder(ctx, destX, destY, destW, destH);
                     }
                 } else {
-                    drawGenerativePlaceholder(ctx, x, y, dw, dh);
+                    drawGenerativePlaceholder(ctx, destX, destY, destW, destH);
                 }
             } 
             
@@ -474,26 +498,22 @@ export const compositePayloadToCanvas = async (payload: TransformedPayload, psd:
 
                 // Critical Rule: Graceful skip if binary canvas is missing (common for adjustment layers)
                 if (sourceLayer && sourceLayer.canvas) {
-                    const { x, y, w: dw, h: dh } = layer.coords;
-
-                    // Rotation Logic: Use Canvas Transform instead of temp canvas
+                    // Rotation Logic: Use Canvas Transform
                     if (layer.transform && layer.transform.rotation) {
                         const rot = (layer.transform.rotation * Math.PI) / 180;
                         
-                        // Translate to center of target rect
-                        const cx = x + dw / 2;
-                        const cy = y + dh / 2;
+                        // Translate to center of target rect in local space
+                        const cx = destX + destW / 2;
+                        const cy = destY + destH / 2;
                         
                         ctx.translate(cx, cy);
                         ctx.rotate(rot);
                         
                         // Draw centered at origin (relative to translation)
-                        // Note: dw, dh are the scaled dimensions
-                        ctx.drawImage(sourceLayer.canvas, -dw / 2, -dh / 2, dw, dh);
+                        ctx.drawImage(sourceLayer.canvas, -destW / 2, -destH / 2, destW, destH);
                     } else {
-                        // Direct Draw (Standard)
-                        // ABSOLUTE MAPPING: coords.x/y are the final destination on the canvas
-                        ctx.drawImage(sourceLayer.canvas, x, y, dw, dh);
+                        // Direct Draw (Standard) with Normalized Coordinates
+                        ctx.drawImage(sourceLayer.canvas, destX, destY, destW, destH);
                     }
                 }
             }

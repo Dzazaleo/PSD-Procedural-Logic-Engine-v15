@@ -923,7 +923,10 @@ export const RemapperNode = memo(({ id, data }: NodeProps<PSDNodeData>) => {
               targetContainer: targetData.name,
               layers: transformedLayers,
               scaleFactor: scale,
-              metrics: { source: { w: sourceRect.w, h: sourceRect.h }, target: { w: targetRect.w, h: targetRect.h } },
+              metrics: { 
+                  source: { x: sourceRect.x, y: sourceRect.y, w: sourceRect.w, h: sourceRect.h }, 
+                  target: { x: targetRect.x, y: targetRect.y, w: targetRect.w, h: targetRect.h } 
+              },
               requiresGeneration: requiresGeneration,
               // Use store payload's preview if available, otherwise source data's
               previewUrl: storePayload?.previewUrl || sourceData.previewUrl,

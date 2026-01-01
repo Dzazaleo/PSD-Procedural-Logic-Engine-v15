@@ -209,7 +209,7 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
                  targetContainer: slotName,
                  layers: [],
                  scaleFactor: 1,
-                 metrics: { source: {w:0,h:0}, target: {w:0,h:0} }
+                 metrics: { source: {x:0, y:0, w:0, h:0}, target: {x:0, y:0, w:0, h:0} }
                };
           }
       }
