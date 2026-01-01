@@ -23,7 +23,8 @@ import { RemapperNode } from './components/RemapperNode';
 import { DesignAnalystNode } from './components/DesignAnalystNode'; 
 import { ExportPSDNode } from './components/ExportPSDNode';
 import { KnowledgeNode } from './components/KnowledgeNode'; 
-import { DesignReviewerNode } from './components/DesignReviewerNode'; 
+import { DesignReviewerNode } from './components/DesignReviewerNode';
+import { ContainerPreviewNode } from './components/ContainerPreviewNode'; // Import new node
 import { ProjectControls } from './components/ProjectControls';
 import { PSDNodeData } from './types';
 import { ProceduralStoreProvider } from './store/ProceduralContext';
@@ -261,9 +262,9 @@ const App: React.FC = () => {
     remapper: RemapperNode,
     designAnalyst: DesignAnalystNode, 
     designReviewer: DesignReviewerNode,
+    containerPreview: ContainerPreviewNode, // Registered new node
     exportPsd: ExportPSDNode,
     knowledge: KnowledgeNode,
-    // Note: containerPreview will be added here in a future step, but logic is prepared
   }), []);
 
   return (
