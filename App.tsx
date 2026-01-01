@@ -218,11 +218,12 @@ const App: React.FC = () => {
         }
 
         // Export Node Validation Update (PHASE 4: STRICT GATE)
+        // Updated to include 'containerPreview' as a valid polished source
         if (targetNode.type === 'exportPsd' && params.targetHandle?.startsWith('input-')) {
-            // STRICT PRODUCTION GATE: Only accept DesignReviewer
-            if (sourceNode.type !== 'designReviewer') {
-                console.error(`[PIPELINE VIOLATION] Export Gate Locked. Input must come from 'DesignReviewer'. Attempted source: ${sourceNode.type}`);
-                alert("⛔ PIPELINE ENFORCEMENT: The Export Node strictly requires a 'Design Reviewer' connection. Direct connections from Remapper or Resolvers are prohibited in Production Mode.");
+            // STRICT PRODUCTION GATE: Only accept DesignReviewer OR ContainerPreview
+            if (sourceNode.type !== 'designReviewer' && sourceNode.type !== 'containerPreview') {
+                console.error(`[PIPELINE VIOLATION] Export Gate Locked. Input must come from 'DesignReviewer' or 'ContainerPreview'. Attempted source: ${sourceNode.type}`);
+                alert("⛔ PIPELINE ENFORCEMENT: The Export Node strictly requires a 'Design Reviewer' or 'Container Preview' connection. Direct connections from Remapper or Resolvers are prohibited in Production Mode.");
                 return;
             }
         }
@@ -262,6 +263,7 @@ const App: React.FC = () => {
     designReviewer: DesignReviewerNode,
     exportPsd: ExportPSDNode,
     knowledge: KnowledgeNode,
+    // Note: containerPreview will be added here in a future step, but logic is prepared
   }), []);
 
   return (

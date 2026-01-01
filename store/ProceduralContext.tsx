@@ -16,8 +16,12 @@ interface ProceduralState {
   payloadRegistry: Record<string, Record<string, TransformedPayload>>;
 
   // Maps NodeID -> HandleID -> Polished Payload (CARO Output)
-  // Stores the final refined transforms from Reviewer nodes
+  // Stores the final refined transforms from Reviewer nodes (and Preview node proxies)
   reviewerRegistry: Record<string, Record<string, TransformedPayload>>;
+
+  // Maps NodeID -> HandleID -> Base64 Image String
+  // Specific registry for caching the visual renders from ContainerPreviewNode
+  previewRegistry: Record<string, Record<string, string>>;
 
   // Maps NodeID -> HandleID -> LayoutStrategy (AI Analysis)
   analysisRegistry: Record<string, Record<string, LayoutStrategy>>;
@@ -35,6 +39,7 @@ interface ProceduralContextType extends ProceduralState {
   registerResolved: (nodeId: string, handleId: string, context: MappingContext) => void;
   registerPayload: (nodeId: string, handleId: string, payload: TransformedPayload, masterOverride?: boolean) => void;
   registerReviewerPayload: (nodeId: string, handleId: string, payload: TransformedPayload) => void;
+  registerPreviewPayload: (nodeId: string, handleId: string, payload: TransformedPayload, renderUrl: string) => void;
   updatePayload: (nodeId: string, handleId: string, partial: Partial<TransformedPayload>) => void; 
   registerAnalysis: (nodeId: string, handleId: string, strategy: LayoutStrategy) => void;
   registerKnowledge: (nodeId: string, context: KnowledgeContext) => void;
@@ -144,6 +149,7 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
   const [resolvedRegistry, setResolvedRegistry] = useState<Record<string, Record<string, MappingContext>>>({});
   const [payloadRegistry, setPayloadRegistry] = useState<Record<string, Record<string, TransformedPayload>>>({});
   const [reviewerRegistry, setReviewerRegistry] = useState<Record<string, Record<string, TransformedPayload>>>({});
+  const [previewRegistry, setPreviewRegistry] = useState<Record<string, Record<string, string>>>({});
   const [analysisRegistry, setAnalysisRegistry] = useState<Record<string, Record<string, LayoutStrategy>>>({});
   const [knowledgeRegistry, setKnowledgeRegistry] = useState<KnowledgeRegistry>({});
   const [globalVersion, setGlobalVersion] = useState<number>(0);
@@ -270,6 +276,49 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     });
   }, []);
 
+  // New: Specialized Registry for Preview Nodes acting as "Polished" Proxies
+  const registerPreviewPayload = useCallback((nodeId: string, handleId: string, payload: TransformedPayload, renderUrl: string) => {
+    // 1. Store Render in Preview Registry (Visual State)
+    setPreviewRegistry(prev => {
+        const nodeRecord = prev[nodeId] || {};
+        // If image hasn't changed, skip
+        if (nodeRecord[handleId] === renderUrl) return prev;
+        return {
+            ...prev,
+            [nodeId]: { ...nodeRecord, [handleId]: renderUrl }
+        };
+    });
+
+    // 2. Proxy Payload to Reviewer Registry (Data State)
+    // This allows ExportNode to find the data in a "trusted" registry with 'isPolished' ensured.
+    setReviewerRegistry(prev => {
+        const nodeRecord = prev[nodeId] || {};
+        const currentPayload = nodeRecord[handleId];
+
+        // Ensure payload is marked polished and carries the visual preview
+        const effectivePayload = { 
+            ...payload, 
+            previewUrl: renderUrl, // Attach the high-fidelity render
+            isPolished: true       // Enforce gate
+        };
+
+        // Reconcile to prevent jitter
+        const reconciledPayload = reconcileTerminalState(effectivePayload, currentPayload);
+
+        if (currentPayload && JSON.stringify(currentPayload) === JSON.stringify(reconciledPayload)) {
+            return prev;
+        }
+
+        return {
+            ...prev,
+            [nodeId]: {
+                ...nodeRecord,
+                [handleId]: reconciledPayload
+            }
+        };
+    });
+  }, []);
+
   // NEW: Atomic Partial Update to prevent Stale Closures
   const updatePayload = useCallback((nodeId: string, handleId: string, partial: Partial<TransformedPayload>) => {
     setPayloadRegistry(prev => {
@@ -362,6 +411,13 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
         const { [nodeId]: _, ...rest } = prev; 
         return rest; 
     });
+
+    // Clean up Preview Registry
+    setPreviewRegistry(prev => {
+        if (!prev[nodeId]) return prev;
+        const { [nodeId]: _, ...rest } = prev;
+        return rest;
+    });
     
     // Lifecycle Force Refresh: 
     // Increment global version to notify downstream subscribers (like Analyst Node) 
@@ -379,6 +435,7 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     resolvedRegistry,
     payloadRegistry,
     reviewerRegistry,
+    previewRegistry,
     analysisRegistry,
     knowledgeRegistry,
     globalVersion,
@@ -387,6 +444,7 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     registerResolved,
     registerPayload,
     registerReviewerPayload,
+    registerPreviewPayload,
     updatePayload, 
     registerAnalysis,
     registerKnowledge,
@@ -394,8 +452,8 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     unregisterNode,
     triggerGlobalRefresh
   }), [
-    psdRegistry, templateRegistry, resolvedRegistry, payloadRegistry, reviewerRegistry, analysisRegistry, knowledgeRegistry, globalVersion,
-    registerPsd, registerTemplate, registerResolved, registerPayload, registerReviewerPayload, updatePayload, registerAnalysis, registerKnowledge, updatePreview,
+    psdRegistry, templateRegistry, resolvedRegistry, payloadRegistry, reviewerRegistry, previewRegistry, analysisRegistry, knowledgeRegistry, globalVersion,
+    registerPsd, registerTemplate, registerResolved, registerPayload, registerReviewerPayload, registerPreviewPayload, updatePayload, registerAnalysis, registerKnowledge, updatePreview,
     unregisterNode, triggerGlobalRefresh
   ]);
 

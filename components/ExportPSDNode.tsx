@@ -185,8 +185,10 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
       const slotName = edge.targetHandle.replace('input-', '');
       
       // PHASE 4: PRIORITY LOOKUP (Reviewer -> Error)
+      // Note: ContainerPreviewNodes proxy their payload into reviewerRegistry to act as "Polished" sources.
+      // Therefore, Export can safely rely on reviewerRegistry for all valid inputs.
       
-      // A. Check Reviewer Registry (Absolute Source of Truth)
+      // A. Check Reviewer Registry (Absolute Source of Truth for Polished Content)
       const reviewerData = reviewerRegistry[edge.source];
       let payload = reviewerData ? reviewerData[edge.sourceHandle || ''] : undefined;
 
@@ -198,7 +200,7 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
           const isResolver = !!resolvedRegistry[edge.source]?.[edge.sourceHandle || ''];
 
           if (isRemapper || isResolver) {
-               errors.push(`Slot '${slotName}': PROCEDURAL_GATE_LOCKED. Content must be polished by Design Reviewer.`);
+               errors.push(`Slot '${slotName}': PROCEDURAL_GATE_LOCKED. Content must be polished by Design Reviewer or verified by Preview.`);
                // Create dummy payload to render error state
                payload = {
                  status: 'error',

@@ -224,6 +224,7 @@ export interface PSDNodeData {
   remapperConfig?: RemapperConfig | null; // For RemapperNode state
   transformedPayload?: TransformedPayload | null; // For RemapperNode output
   knowledgeContext?: KnowledgeContext | null; // For KnowledgeNode state
+  previewImages?: Record<string, string>; // For ContainerPreviewNode persistence (HandleID -> Base64)
   
   // Dynamic State Persistence
   channelCount?: number;
