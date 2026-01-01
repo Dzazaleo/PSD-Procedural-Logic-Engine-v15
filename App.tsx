@@ -24,7 +24,7 @@ import { DesignAnalystNode } from './components/DesignAnalystNode';
 import { ExportPSDNode } from './components/ExportPSDNode';
 import { KnowledgeNode } from './components/KnowledgeNode'; 
 import { DesignReviewerNode } from './components/DesignReviewerNode';
-import { ContainerPreviewNode } from './components/ContainerPreviewNode'; // Import new node
+import { ContainerPreviewNode } from './components/ContainerPreviewNode'; 
 import { ProjectControls } from './components/ProjectControls';
 import { PSDNodeData } from './types';
 import { ProceduralStoreProvider } from './store/ProceduralContext';
@@ -94,14 +94,20 @@ const initialNodes: Node<PSDNodeData>[] = [
     style: { width: 500 }
   },
   {
-    id: 'node-reviewer-1', // NEW NODE INSTANCE
+    id: 'node-reviewer-1', 
     type: 'designReviewer',
-    position: { x: 2200, y: 400 }, // Positioned above export, after remapper
+    position: { x: 2200, y: 400 }, 
     data: { 
         fileName: null, template: null, validation: null, designLayers: null,
         instanceCount: 1 
     },
     style: { width: 480 }
+  },
+  {
+    id: 'node-preview-1',
+    type: 'containerPreview',
+    position: { x: 2750, y: 350 }, // Positioned after Reviewer, before Export
+    data: { fileName: null, template: null, validation: null, designLayers: null },
   },
   {
     id: 'node-5',
@@ -112,7 +118,7 @@ const initialNodes: Node<PSDNodeData>[] = [
   {
     id: 'node-export-1',
     type: 'exportPsd',
-    position: { x: 2300, y: 400 }, // Shifted right to accommodate reviewer flow
+    position: { x: 3150, y: 400 }, // Shifted right to accommodate full pipeline
     data: { fileName: null, template: null, validation: null, designLayers: null },
   }
 ];
@@ -199,7 +205,7 @@ const App: React.FC = () => {
             }
         }
 
-        // Design Reviewer Validation Rules (NEW)
+        // Design Reviewer Validation Rules
         if (targetNode.type === 'designReviewer') {
             const handle = params.targetHandle || '';
 
@@ -213,6 +219,26 @@ const App: React.FC = () => {
                 // Accepts Target Splitter (context definition)
                 if (sourceNode.type !== 'targetSplitter') {
                     console.warn("Reviewer 'Target Input' requires a Target Splitter.");
+                    return;
+                }
+            }
+        }
+
+        // Container Preview Validation Rules (NEW)
+        if (targetNode.type === 'containerPreview') {
+            const handle = params.targetHandle || '';
+
+            if (handle === 'payload-in') {
+                // Accepts output from DesignReviewer (Polished) or Remapper (Draft)
+                // Strict flow: Remapper -> Reviewer -> Preview
+                if (sourceNode.type !== 'designReviewer' && sourceNode.type !== 'remapper') {
+                    console.warn("Preview 'Payload Input' requires a Design Reviewer or Remapper source.");
+                    return;
+                }
+            } else if (handle === 'target-in') {
+                // Needs target definition to draw bounds accurately
+                if (sourceNode.type !== 'targetSplitter') {
+                    console.warn("Preview 'Target Input' requires a Target Splitter.");
                     return;
                 }
             }
