@@ -3,7 +3,7 @@ import { Handle, Position, NodeProps, useEdges, NodeResizer } from 'reactflow';
 import { PSDNodeData, TransformedPayload } from '../types';
 import { useProceduralStore } from '../store/ProceduralContext';
 import { compositePayloadToCanvas } from '../services/psdService';
-import { Eye, Layers, Maximize, Scan, AlertTriangle, CheckCircle2, FileWarning, ShieldCheck } from 'lucide-react';
+import { Eye, Layers, Maximize, Scan, AlertTriangle, CheckCircle2, FileWarning, ShieldCheck, RotateCw } from 'lucide-react';
 
 export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -19,7 +19,9 @@ export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) 
     reviewerRegistry, 
     psdRegistry, 
     registerPreviewPayload,
-    unregisterNode 
+    unregisterNode,
+    globalVersion,
+    triggerGlobalRefresh
   } = useProceduralStore();
 
   useEffect(() => {
@@ -46,7 +48,7 @@ export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) 
     return null;
   }, [edges, id, payloadRegistry, reviewerRegistry]);
 
-  // 2. Render Effect
+  // 2. Render Effect (Triggered by Payload OR Global Version/Rehydration)
   useEffect(() => {
     if (!incomingPayload) {
         setPreviewUrl(null);
@@ -54,28 +56,38 @@ export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) 
         return;
     }
 
-    // Optimization: Check deep equality using JSON string (simple for this struct)
+    const psd = psdRegistry[incomingPayload.sourceNodeId];
+    
+    // BINARY DETECTION LOGIC
+    if (!psd) {
+        setError('BINARY_MISSING');
+        setIsLoading(false);
+        // CRITICAL: Relay payload even if visual is missing to maintain data flow to Export
+        // We pass an empty string for the URL to indicate "no visual available" but data is valid.
+        registerPreviewPayload(id, 'payload-out', incomingPayload, '');
+        return;
+    }
+
+    // Reset error if we recovered
+    if (error === 'BINARY_MISSING') {
+        setError(null);
+    }
+
+    // Optimization: Check deep equality using JSON string + Global Version
+    // We include globalVersion in the signature to force re-renders if the store signals a refresh
     const payloadSignature = JSON.stringify({
         metrics: incomingPayload.metrics,
-        layers: incomingPayload.layers, // Includes transforms
-        id: incomingPayload.generationId
+        layers: incomingPayload.layers,
+        id: incomingPayload.generationId,
+        gv: globalVersion
     });
 
-    if (lastPayloadRef.current === payloadSignature && !error) {
+    if (lastPayloadRef.current === payloadSignature && !error && previewUrl) {
         return; 
     }
     lastPayloadRef.current = payloadSignature;
 
-    const psd = psdRegistry[incomingPayload.sourceNodeId];
-    
-    if (!psd) {
-        setError('BINARY_MISSING');
-        setIsLoading(false);
-        return;
-    }
-
     // Start Render
-    setError(null);
     setIsLoading(true);
 
     let isMounted = true;
@@ -85,9 +97,10 @@ export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) 
             if (isMounted && url) {
                 setPreviewUrl(url);
                 setIsLoading(false);
+                setError(null);
                 
                 // 3. Broadcast to Store (Proxy Logic)
-                // This validates the node as a 'Polished' source for Export
+                // This validates the node as a 'Polished' source for Export with a valid visual
                 registerPreviewPayload(id, 'payload-out', incomingPayload, url);
             }
         })
@@ -96,12 +109,14 @@ export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) 
             if (isMounted) {
                 setError('RENDER_FAILED');
                 setIsLoading(false);
+                // Pipeline Safety: Still relay the data even if rendering fails
+                registerPreviewPayload(id, 'payload-out', incomingPayload, '');
             }
         });
 
     return () => { isMounted = false; };
 
-  }, [incomingPayload, psdRegistry, id, registerPreviewPayload, error]);
+  }, [incomingPayload, psdRegistry, id, registerPreviewPayload, globalVersion]);
 
   const getLayerCount = (payload: TransformedPayload) => {
       let count = 0;
@@ -119,17 +134,17 @@ export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) 
   const isPolished = incomingPayload?.isPolished;
 
   return (
-    <div className="min-w-[300px] min-h-[300px] bg-slate-900 rounded-lg shadow-2xl border border-emerald-500/50 font-sans flex flex-col overflow-hidden transition-all hover:border-emerald-400 group">
+    <div className={`min-w-[300px] min-h-[300px] bg-slate-900 rounded-lg shadow-2xl border font-sans flex flex-col overflow-hidden transition-all group ${error === 'BINARY_MISSING' ? 'border-orange-500/50 hover:border-orange-400' : 'border-emerald-500/50 hover:border-emerald-400'}`}>
       <NodeResizer minWidth={300} minHeight={300} isVisible={true} lineStyle={{ border: 'none' }} handleStyle={{ background: 'transparent' }} />
 
       {/* Header */}
-      <div className="bg-emerald-950/80 p-2 border-b border-emerald-500/30 flex items-center justify-between shrink-0 relative overflow-hidden">
+      <div className={`p-2 border-b flex items-center justify-between shrink-0 relative overflow-hidden ${error === 'BINARY_MISSING' ? 'bg-orange-950/80 border-orange-500/30' : 'bg-emerald-950/80 border-emerald-500/30'}`}>
          <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10"></div>
          <div className="flex items-center space-x-2 z-10">
-           <Eye className="w-4 h-4 text-emerald-400" />
+           <Eye className={`w-4 h-4 ${error === 'BINARY_MISSING' ? 'text-orange-400' : 'text-emerald-400'}`} />
            <div className="flex flex-col leading-none">
-             <span className="text-sm font-bold text-emerald-100 tracking-tight">Visual Preview</span>
-             <span className="text-[9px] text-emerald-500/70 font-mono">RENDER ENGINE</span>
+             <span className={`text-sm font-bold tracking-tight ${error === 'BINARY_MISSING' ? 'text-orange-100' : 'text-emerald-100'}`}>Visual Preview</span>
+             <span className={`text-[9px] font-mono ${error === 'BINARY_MISSING' ? 'text-orange-500/70' : 'text-emerald-500/70'}`}>RENDER ENGINE</span>
            </div>
          </div>
          <div className="z-10 flex space-x-2">
@@ -175,23 +190,38 @@ export const ContainerPreviewNode = memo(({ id, data }: NodeProps<PSDNodeData>) 
               </div>
           )}
 
-          {/* Binary Missing Error */}
+          {/* Binary Missing Error - REHYDRATION STATE */}
           {error === 'BINARY_MISSING' && (
-              <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center z-20 p-4 text-center border-2 border-orange-500/30 m-2 rounded">
+              <div className="absolute inset-0 bg-orange-950/40 backdrop-blur-sm flex flex-col items-center justify-center z-20 p-4 text-center border-2 border-orange-500/30 m-2 rounded">
                   <FileWarning className="w-8 h-8 text-orange-500 mb-2 animate-bounce" />
-                  <span className="text-xs font-bold text-orange-200 uppercase tracking-wider mb-1">Binary Data Missing</span>
-                  <span className="text-[10px] text-orange-400 leading-tight">
-                      The visual assets for source node 
-                      <span className="bg-black/30 px-1 mx-1 rounded font-mono text-orange-200">
-                          {incomingPayload?.sourceNodeId}
-                      </span>
-                      are not in memory. Please reload the source PSD.
+                  <span className="text-xs font-bold text-orange-200 uppercase tracking-wider mb-1">Binary Source Missing</span>
+                  <span className="text-[10px] text-orange-200/80 leading-tight mb-3 px-2">
+                      Please re-upload the source PSD in the Load Node to enable preview.
+                  </span>
+                  
+                  <button 
+                    onClick={() => triggerGlobalRefresh()}
+                    className="flex items-center gap-1.5 bg-orange-600 hover:bg-orange-500 text-white px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-wider transition-colors shadow-lg"
+                  >
+                      <RotateCw className="w-3 h-3" />
+                      Refresh
+                  </button>
+              </div>
+          )}
+          
+          {/* Generic Render Error */}
+          {error === 'RENDER_FAILED' && (
+              <div className="absolute inset-0 bg-red-950/40 backdrop-blur-sm flex flex-col items-center justify-center z-20 p-4 text-center border-2 border-red-500/30 m-2 rounded">
+                  <AlertTriangle className="w-8 h-8 text-red-500 mb-2" />
+                  <span className="text-xs font-bold text-red-200 uppercase tracking-wider mb-1">Render Failed</span>
+                  <span className="text-[10px] text-red-200/80 leading-tight">
+                      The compositor encountered an error. Data has been passed through.
                   </span>
               </div>
           )}
 
           {/* Content Render */}
-          {previewUrl && !isLoading && (
+          {previewUrl && !isLoading && !error && (
               <img 
                 src={previewUrl} 
                 alt="Container Preview" 
