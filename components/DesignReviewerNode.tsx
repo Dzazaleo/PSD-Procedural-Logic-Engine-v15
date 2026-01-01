@@ -18,6 +18,9 @@ const renderCurrentState = async (payload: TransformedPayload, psd: Psd): Promis
     if (!payload || !psd) return null;
 
     const { w, h } = payload.metrics.target;
+    const targetX = payload.metrics.target.x || 0;
+    const targetY = payload.metrics.target.y || 0;
+
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
@@ -39,12 +42,12 @@ const renderCurrentState = async (payload: TransformedPayload, psd: Psd): Promis
                     const originalLayer = findLayerByPath(psd, layer.id);
                     if (originalLayer && originalLayer.canvas) {
                         try {
-                            // Draw at transformed coordinates
+                            // Draw at transformed coordinates, offset by target position
                             ctx.globalAlpha = layer.opacity;
                             ctx.drawImage(
                                 originalLayer.canvas, 
-                                layer.coords.x, 
-                                layer.coords.y, 
+                                layer.coords.x - targetX, 
+                                layer.coords.y - targetY, 
                                 layer.coords.w, 
                                 layer.coords.h
                             );
@@ -59,8 +62,8 @@ const renderCurrentState = async (payload: TransformedPayload, psd: Psd): Promis
                     ctx.fillStyle = 'rgba(192, 132, 252, 0.3)'; // Purple tint
                     ctx.strokeStyle = 'rgba(192, 132, 252, 0.8)';
                     ctx.lineWidth = 2;
-                    ctx.fillRect(layer.coords.x, layer.coords.y, layer.coords.w, layer.coords.h);
-                    ctx.strokeRect(layer.coords.x, layer.coords.y, layer.coords.w, layer.coords.h);
+                    ctx.fillRect(layer.coords.x - targetX, layer.coords.y - targetY, layer.coords.w, layer.coords.h);
+                    ctx.strokeRect(layer.coords.x - targetX, layer.coords.y - targetY, layer.coords.w, layer.coords.h);
                 }
 
                 ctx.globalAlpha = 1.0;

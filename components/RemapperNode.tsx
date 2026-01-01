@@ -16,7 +16,7 @@ interface InstanceData {
     layers?: SerializableLayer[];
     aiStrategy?: LayoutStrategy;
     previewUrl?: string; 
-    targetDimensions?: { w: number, h: number }; 
+    targetDimensions?: { x: number, y: number, w: number, h: number }; 
   };
   target: {
     ready: boolean;
